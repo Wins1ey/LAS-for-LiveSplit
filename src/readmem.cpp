@@ -9,6 +9,7 @@
 #include <thread>
 #include <variant>
 #include <signal.h>
+#include <vector>
 
 #include "headers/readmem.hpp"
 #include "headers/lasprint.hpp"
@@ -27,6 +28,7 @@ using std::this_thread::sleep_for;
 using std::chrono::milliseconds;
 using std::array;
 using std::stringstream;
+using std::vector;
 
 string processName;
 string newProcessName;
@@ -187,6 +189,35 @@ string readMemory(uint64_t memAddress, int bufferSize)
     return string(buffer);  // Return the read string
 }
 
+vector<uint8_t> readBytesFromMemory(uint64_t memAddress, int bufferSize)
+{
+    vector<uint8_t> buffer(bufferSize); // Buffer to store the read byte array
+
+    struct iovec memLocal;
+    struct iovec memRemote;
+
+    memLocal.iov_base = &buffer; // Use the buffer to store the byte array
+    memLocal.iov_len = bufferSize;
+    memRemote.iov_len = bufferSize;
+    memRemote.iov_base = reinterpret_cast<void*>(memAddress);
+
+    ssize_t memNread = process_vm_readv(pid, &memLocal, 1, &memRemote, 1, 0);
+    if (memNread == -1 && !kill(pid, 0))
+    {
+        buffer.clear();
+    }
+    else if (memNread == -1 && kill(pid, 0))
+    {
+        runAutoSplitter();
+    }
+    else if (memNread != memRemote.iov_len)
+    {
+        throw runtime_error("Error reading process memory: short read of " + to_string(memNread) + " bytes\n");
+    }
+
+    return buffer; // Return the read byte array
+}
+
 // Template instantiations for different value types, specifying the type as a template parameter.
 template int8_t readMemory<int8_t>(uint64_t memAddress);
 template uint8_t readMemory<uint8_t>(uint64_t memAddress);
@@ -285,6 +316,22 @@ int readAddress(lua_State* L)
             int bufferSize = stoi(valueType.substr(6));
             value = readMemory(address, bufferSize);
             lua_pushstring(L, get<string>(value).c_str());
+            return 1;
+        }
+        else if (valueType.find("byte") != string::npos)
+        {
+            int bufferSize = stoi(valueType.substr(4));
+            vector<uint8_t> byteVector = readBytesFromMemory(address, bufferSize);
+
+            // Push the byte vector to the Lua stack
+            lua_newtable(L); // Create a new Lua table
+
+            for (int i = 0; i < byteVector.size(); i++)
+            {
+                lua_pushinteger(L, i + 1); // Push the index
+                lua_pushinteger(L, byteVector[i]); // Push the byte value
+                lua_settable(L, -3); // Set the key-value pair in the table
+            }
             return 1;
         }
         else
